@@ -1,0 +1,42 @@
+开始
+没有什么思路
+1.三大常见的join算法（循环嵌套，hash,归并）
+2.先看看常用数据库如何实现的，当然是看MySQL了，这里发现掘金的MySQL小册子讲的很明白。
+3.MySQL实现了循环嵌套join,这也是最常见的join。
+4.实现了一个简单的版本，测试时间是example的3.5倍左右（失败）
+
+忽然想起群里有一位老哥的聊天记录，大概是他实现了并发的hashjoin，但是速度提升并不大，一位小猪佩琪头像的大佬提示他换个大点的数据集。（感觉抓住的重点，首先题目是个等值连接，明显hashjoin更加符合题目，其次hash查找的速度是o1，如果数据集不够大，查找的时间开销低于，goroutine的调度开销）。example实现的就是一个hashjoin所以直接修改它。
+
+第一个版本
+由于第一次提交时只用了一个全局的sum。这里就只并发probe,等到了所有的rowID再去计算sum。
+rowIDs := make(chan []int64,runtime.NumCPU())
+for _, row := range tbl1 {
+		go func(r chan<- []int64) {
+			rowID := probe(hashtable, row, offset1)
+                        r<-rowID
+}
+}
+make失败。比预期值大很多，rowID重复了。。。开始修改
+func myProbe(hashtable *mvmap.MVMap, row []string, offset []int, rowIDs chan<- []int64) {
+	var keyHash []byte
+	var vals [][]byte
+	var rowID []int64
+	for _, off := range offset {
+		keyHash = append(keyHash, []byte(row[off])...)
+	}
+	vals = hashtable.Get(keyHash, vals)
+	for _, val := range vals {
+		rowID = append(rowID, *(*int64)(unsafe.Pointer(&val[0])))
+	}
+	rowIDs <- rowID;
+}
+实现了自己的probe代码风格和mapredue里的run()很像。
+make成功！
+
+性能分析
+pprof发现大部分开销都在文件读取和建表上。那么就把example读文件串行过程，改成读一个文件建表读另一个文件。其次hash查找的速度是o1，如果数据集不够大，查找的时间开销低于，goroutine的调度开销。所以数据集比较小的情况下并发不如单线程。其次应该用较小的表去构建hashtable。并且衍生出了第二种思路可以先把大数据集文件分区，再去probe。
+
+花絮：换了大数据集一直make失败才想起来预期值没变。。。。
+总结：大量复用了example的代码，其实只是实现了一个并发的example。
+
+
